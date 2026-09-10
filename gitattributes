@@ -1,3 +1,0 @@
-# Los .html son resultados generados (knit de los .Rmd), no código fuente.
-# Se excluyen de las estadísticas de lenguaje para que GitHub muestre R como lenguaje principal.
-*.html linguist-generated=true
