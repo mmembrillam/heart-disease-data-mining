@@ -1,0 +1,642 @@
+---
+title: 'Minería de Datos: Clustering y Modelos Supervisados (Heart Disease UCI)'
+author: "Manuel Membrilla Martinez"
+date: "Enero 2026"
+output:
+  html_document:
+    highlight: default
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_depth: 2
+    includes:
+  word_document: default
+  pdf_document:
+    highlight: zenburn
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Modelado: clustering y clasificación supervisada
+
+Continuación del análisis iniciado en la preparación sobre el dataset de Heart Disease UCI. Aquí se aplican y comparan técnicas no supervisadas (K-Means, K-Medians, DBSCAN/OPTICS) y supervisadas (árbol de decisión C5.0, Random Forest) para predecir el riesgo cardiovascular.
+
+# Analisis y desarrollo
+## Carga y preprocesamiento de datos
+
+En este apartado realizaremos la carga de datos y el preprocesamiento que hemos realizado en la PRA1. En caso de alguna modificación respecto a la anterior practica se dejara indicado con un comentario. El objetivo de esta practica sería exploratorio(no supervisado) para detectar si los pacientes se agrupan de forma natural en perfiles diferenciados y predictivo(supervisado) donde se construiran modelos para anticipar la enfermedad en nuevos pacientes.
+
+```{r}
+#Cargamos los datos
+heart_df <- read.csv('heart.csv', stringsAsFactors=TRUE)
+```
+
+Como hemos identificado en la practica anterior, las variables de Cholesterol y RestingBP tenian algunos valores a 0 que se identifico como errores en la medicion o bien que faltaba el dato. Es por ello que se realizara la mediana para no perder registros que son utiles en nuestro estudio.
+
+```{r}
+if(!require(dplyr)) install.packages("dplyr"); library(dplyr)
+#Respecto a la anterior practica, RestingBP=0, es un error, al ser solo un caso aislado se ha decido la eliminación en vez del uso de la mediana
+heart_df <- heart_df %>% filter(RestingBP > 0)
+
+# En cuanto al tratamiento de Cholesterol=0, observamos que normalmente era un dato faltante, y para no reducir la muestra realizaremos la mediana segun el Sexo
+
+heart_df$Cholesterol[heart_df$Cholesterol==0] <- NA
+heart_df<-heart_df %>% group_by(Sex) %>% mutate(Cholesterol = ifelse(is.na(Cholesterol), median(Cholesterol, na.rm = TRUE), Cholesterol)) %>% ungroup()
+
+#Convertimos los tipos soluccionando problemas en graficos con NA de la PR1
+heart_df$HeartDisease <- factor(heart_df$HeartDisease, levels = c(0, 1), labels = c("No", "Si"))
+heart_df$Sex <- as.factor(heart_df$Sex)
+heart_df$ChestPainType <- as.factor(heart_df$ChestPainType)
+heart_df$RestingECG <- as.factor(heart_df$RestingECG)
+heart_df$ExerciseAngina <- as.factor(heart_df$ExerciseAngina)
+heart_df$ST_Slope <- as.factor(heart_df$ST_Slope)
+heart_df$FastingBS <- factor(heart_df$FastingBS, levels = c(0, 1), labels = c("No", "Si"))
+
+# Verificamos que todo es OK
+
+summary(heart_df)
+```
+
+Ahora mostraremos la relacion corregida entre HeartDisease y Sex, ademas de la relacion con las variables numericas
+
+```{r}
+if(!require(ggplot2)){
+    install.packages('ggplot2', repos='http://cran.us.r-project.org')
+    library(ggplot2)
+}
+```
+
+```{r}
+#Enfermedad vs Sexo (SIN NA)
+
+ggplot(heart_df, aes(x=Sex, fill=HeartDisease)) +geom_bar(position = "fill")+labs(y="Porcentaje", title="Incidencia por Sexo")+theme_minimal()
+```
+
+```{r}
+#Edad vs Enfermedad (SIN NA)
+ggplot(heart_df, aes(x=HeartDisease, y=Age, fill=HeartDisease))+geom_boxplot()+labs(title="Distribución de Edad")+theme_minimal() 
+```
+
+Podemos observar que las enfermedades cardiacas es mayor entre los Hombres respecto al de las Mujeres. Ademas, podemos observar en la caja que los pacientes con enfermedad cardiaca tienden a ser de una edad entre los 55 y 60 años respecto a las pacientes sanos. Aunque esto se deducio en la practica anterior.
+
+## Clustering con K-Means
+### Se obtine la agrupación mediante k-means con los datos originales y normalizados.
+
+```{r}
+# Seleccionamos las variables numericas para el cluster
+heart_df_num <- heart_df %>% select(Age, RestingBP, Cholesterol, MaxHR, Oldpeak)
+
+# Normalizamos
+
+heart_df_scaled <- scale(heart_df_num)
+```
+
+Una manera común de hacer la selección del número de clústers consiste en aplicar el método elbow (codo), que no es más que la selección del número de clústers en base a la inspección de la gráfica que se obtiene al iterar con el mismo conjunto de datos para distintos valores del número de clústers. Se seleccionará el valor que se encuentra en el “codo” de la curva.
+
+```{r}
+# Función para calcular la inercia intracluster (Within-cluster sum of squares)
+inercia_intracluster <- function(vdata, max_k) {
+  wss <- numeric(max_k)
+  for (k in 1:max_k) {
+    wss[k] <- sum(kmeans(vdata, centers = k)$withinss)
+  }
+  return(wss)
+}
+
+# Elbow method
+set.seed(314)
+max_k <- 10
+wss <- inercia_intracluster(heart_df_scaled, max_k)
+plot(1:max_k, wss, type = "b", pch = 19, frame = FALSE,
+     xlab = "Número de clusters (k)", ylab = "Within-cluster sum of squares",
+     main = "Elbow Method para determinar el número óptimo de k")
+```
+
+En este caso el número óptimo de clústers son 2 que es cuando la curva comienza a estabilizarse. Sin embargo, en el metodo Elbow sigue bajando bastante en el 3, y dado que en la medicina podemos diferenciarlos entre sanos, riesgo medio, y enfermos, seleccionaremos k=3 para captar los intermedios aunque matematicamente k=2 sería valido.
+
+```{r}
+k_seleccionado<-3 
+
+# K-means en los datos ORIGINALES
+km_orig <- kmeans(heart_df_num, centers = k_seleccionado, nstart = 25)
+
+# K-means en los datos normalizados
+km_norm <- kmeans(heart_df_scaled, centers = k_seleccionado, nstart = 25)
+
+```
+
+Al utilizar k-means sobre los datos orginiales, Colesterol que tiene valores entre 0 y 600 domina el calculo de distancia frente por ejemplo Oldpeak que es del 0 al 6. Para evitar esto tendremos que asegurarnos que todas las variables aporten de la misma manera. Por ello seleccionaremos el modelo basado en datos normalizados para el analisis.
+
+### Se analizan, muestran y comentan las medidas de calidad del modelo generado.
+
+```{r}
+# Mostramos el porcentaje de la varianza de los datos
+var_group <- km_norm$betweenss / km_norm$totss
+cat("La varianza del modelo es de ", round(var_group * 100, 2), "%")
+```
+Podemos observar como el modelo tiene un 32.36% de varianza, un valor aceptable para ser datos reales con ruido.
+
+```{r}
+if(!require(cluster)) install.packages("cluster"); library(cluster)
+if(!require(factoextra)) install.packages("factoextra"); library(factoextra)
+
+# Visualizamos los clusters (PCA)
+fviz_cluster(km_norm, data = heart_df_scaled, geom = "point", ellipse.type = "norm",
+             ggtheme = theme_minimal(), main = "Visualización de Clústers (K=3)")
+
+```
+
+En este grafico podemos observar tres poligonos que corresponden a los clusteres que se han identificado. Aunque los centros de cada grupo estan distanciadosados, se observan areas donde existen solapamiento. En el solapamiento confirma que la salud cardiovascular es continuo y no existe una frontera fisica que separe realmente de un paciente sano de uno con riesgo. Esto explica por que algunos pacientes se situan en zonas fronterizas entre los clusters. Tambien tenemos que observar como k-means a podido diferenciar exitosamente los perfiles de (sano, riesgo metabolico y deterioro cardiaco)
+
+```{r}
+# Silhouette
+sil <- silhouette(km_norm$cluster, dist(heart_df_scaled))
+fviz_silhouette(sil, print.summary = FALSE, main = "Grafico de Silhouette (K=3)")
+```
+
+Se puede observar como existen valores negativo que indica que podrian existir por solapamiento o bien ruido, suele ser comun en datos medico donde no existe una frontera entre sano y enfermo.
+
+### Se comentan los resultados.
+
+Ahora interpretaremos el perfil clinico de cada grupo analizando los centroides y su respectiva relacion con la enfermedad.
+
+```{r}
+# Asignación del cluster con los datos ORIGINALES
+heart_df_res <- heart_df
+heart_df_res$Cluster <- as.factor(km_norm$cluster)
+
+# Centroides: media de las variables numericas por cada uno de los grupos
+aggregate(cbind(Age, RestingBP, Cholesterol, MaxHR, Oldpeak) ~ Cluster, data = heart_df_res, mean)
+```
+
+```{r}
+# Distribucion en de la enfermedad en cada cluster
+ggplot(heart_df_res,aes(x=Cluster,fill=HeartDisease))+geom_bar(position = "fill")+scale_y_continuous(labels = scales::percent)+labs(title = "Incidente de Enfermedad", y="Porcentaje")
+
+```
+Podemos observar que el cluster 1 es el que pertenece al grupo de los pacientes sanos y en el cluster 2 y 3 el grupo que acumulan mayor cantidad de enfemedades.
+
+```{r}
+
+# Distribucion del sexo en cada cluster
+
+ggplot(heart_df_res, aes(x = Cluster, fill = Sex)) +  geom_bar(position = "fill") + scale_y_continuous(labels = scales::percent) +labs(title = "Distribución por Sexo", y="Porcentaje")
+```
+
+En este grafico podemos observar que la mayoria de los casos de paciente suelen ser hombres, respecto al de las mujeres. Especificando un poco, en el cluster 1 donde son sanos el porcentaje de mujeres es mas elevado que en los grupos de riesgo.
+
+```{r}
+#Distribución de edad
+ggplot(heart_df_res, aes(x=Cluster,y=Age,fill=Cluster))+geom_boxplot()+labs(title="Edad")
+```
+
+Los pacientes sanos (cluster 1) podemos observar que tiene una media de edad de 46 años, mientras que en el cluster 2 donde los pacientes tiene alto riesgo metabolico tiene una media de edad de 59 años y por ultimo en el cluster 3 donde tienen mala respuesta cardiaca tienen 58.8 años.
+
+```{r}
+#Distribución de fecuencia cardiaca (MaxHR)
+ggplot(heart_df_res,aes(x=Cluster,y=MaxHR,fill=Cluster))+geom_boxplot()+labs(title="Frecuencia Cardíaca (MaxHR)")
+```
+
+Observamos como en el cluster 1 donde los pacientes sanos tienen una frecuencia cardiaca maxima mas elevada que el resto de los clusteres (buena forma fisica), en el cluster 2 pertenece a aquellos pacientes que tienen una frecuencia media y el cluster 3 son aquellos que tienen mala respuesta cardiaca (nos indica que es frecunecia cardiaca y no colesterol).
+
+```{r}
+#Distribución de Colesterol
+ggplot(heart_df_res, aes(x=Cluster, y=Cholesterol, fill=Cluster)) + geom_boxplot() + labs(title="Colesterol")
+```
+
+En esta grafica, damos por hecho que todo lo anterior es cierto, debido a que los pacientes del cluster 1 y 3 mantienen un colesterol estable, mientras que en el cluster 2 esta por dabajo, lo que nos indica que tiene riesgo metabolico.
+
+```{r}
+#Distribución de Oldpeak
+ggplot(heart_df_res, aes(x=Cluster, y=Oldpeak, fill=Cluster)) + geom_boxplot() + labs(title="Oldpeak")
+```
+
+Y por ultimo vemos como el cluster 1 esta casi pegado al 0, mientras que el cluster 2 y 3 tienen valores altos. Es decir, el cluster 1 no tiene falta de oxigeno en el corazon, mientras los otro dos si.
+
+Como conclusión y haciendo un plano general de todas las graficas anteriores podemos definir por cada numero de los cluster una descripcion:
+
+En el primer cluster se encuentran los sanos, donde normalmente tiene la media de edad mas baja (media de 46 años) y la frecuencia cardiaca maxima (mas alta con 157). Observamos en la tabla como este grupo tiene un numero de incidencias minimo.
+
+El segundo cluster representan los perfiles de alto riesgo metabolico (Colesterol alto) donde la media de edad esta en unos 59 años aproximadamente, tienen una presion arterial de 148 y un colesterol de 272, ademas de tener el oldpeak en 1.85. Ademas podemos observar que tienen el mayor numero de incidencias.
+
+Por ultimo el tercer cluster son perfiles que aunque tienene niveles de colesterol y presion controlados respecto al cluster 1, tienen una frecuencia cardiaca maxima mas baja (alrededor de 117), eso indica una mala respuesta cardiaca al esfuerzo. La media de edad es de 57.8 años
+
+En conclusión, podemos observar como K-means a podido fragmentar los pacientes en tres estados: Paciencientes Sanos (Cluster 1), pacientes con riesgo metabolico (Cluster 2) y pacientes con deterioro cardiaco (Cluster 3)
+
+## Comparación K-Means vs. K-Medians
+### Se obtiene la agrupación k-medians con el número de grupos seleccionado en el ejercicio 1 (de forma opcional también se puede obtener la agrupación mediante el método "around medoids").
+
+K-medians a diferencia de K-means(media y distancia) utiliza la madiana como centroide y esto lo hace mas robusto frente a los outliers, ya que la mediana no se ve desplazada por valores extremos como un colesterol de 600.
+
+Se utilizara la libreria flexclust para implementar dicho algoritmo, ademas de manetener k=3 y los datos normalizados anteriormente.
+
+```{r}
+if(!require(flexclust)) install.packages("flexclust"); library(flexclust)
+
+# Fijamos semilla que utilizamos anteriormente
+set.seed(314)
+
+# Ejecución de K-medians
+kmedians_res <- kcca(heart_df_scaled, k = 3, family = kccaFamily("kmedians"))
+
+# Predicción de los clústeres
+clusters_kmedians <- predict(kmedians_res)
+```
+
+### Se comparan los resultados con los obtenidos en el ejercicio 1.
+
+Para comparar los metodos, realizaremos una table que cruza las asignaciones del k-means del anterior ejecicio con las K-medians de este ejercicio y luego un grafico visual para verlo en un plano general.
+
+```{r}
+#Tabla comparativa
+
+tabla_comparativa <- table(Kmeans = km_norm$cluster, Kmedians = clusters_kmedians)
+print(tabla_comparativa)
+```
+
+```{r}
+# dataframe con coincidencias
+df_comparativa <- as.data.frame(table(Kmeans = as.factor(km_norm$cluster), Kmedians = as.factor(clusters_kmedians)))
+
+# visualizacion grafica
+ggplot(df_comparativa, aes(x = Kmeans, y = Freq, fill = Kmedians)) +geom_bar(stat = "identity", position = "fill") +scale_y_continuous(labels = scales::percent) +
+  labs(title = "Comparativa: K-means vs K-medians", x = "Clúster asignado por K-means", y = "Porcentaje de coincidencia", fill = "Clúster K-medians") 
+```
+
+### Se comentan los resultados. 
+	
+
+Podemos observar altos valores en algunas de las celdas que indica que hay un nucleo claro en cuanto a los pacientes en ambos algoritmos (como puede ser pacientes muy sanos o muy enfermos). Sin embargo en la diagonal existen diferencias bastantes claras debido a que k-means intenta minimizar la varianza y crea grupos esfericos, pero los arrastra los outliers del colesterol o la presion, por otro lado k-means utiliza la suma de distancias (absolutas) que hace que se genere agrupaciones en romboides y por lo tanto es menor sensible a valores extremos.
+	
+En conclusion, podemos decir que k-medians teoricamente es mas adecuado debido a las variables de Cholesterol e Oldpeak qe tienen distribuciones asimetricas, es por ello que k-means puede verse un poco sesgado por los valores moviendo el centro hacia ellos, mientras que k-meadians escoge al mejor "paciente tipo" del grupo.
+	
+## Clustering con métrica de distancia alternativa
+### Se obtiene la agrupación mediante k-means (con los grupos seleccionados en el ejercicio 1), pero usando una métrica de distancia distinta.
+
+En este ejercicio realizaremos el mismo metodo de agrupaciones, sin embargo cambiaremos la distancia, esta se calcula con las diferencias absolutas de las coordenadas. Para ello utilizaremos la libreria amap que permite especificar la distancia.
+
+```{r}
+if(!require(amap)) install.packages("amap"); 
+library(amap)
+
+set.seed(314)
+
+# K-means con distancia Manhattan (Con esto seguimos usando la media como centroide, pero con la distancia manhattan se asignan los puntos)
+km_manhattan <- Kmeans(heart_df_scaled, centers = 3, method = "manhattan", iter.max = 20)
+```
+
+### Se comparan los resultados con los obtenidos en los ejercicios 1 y 2.
+
+## Comparativa 1
+
+```{r}
+# Tabla eucleida (E1) vs manhattan (E3) donde se podra ver el impacto del cambio de la distancia
+table(Euclidea_E1 = km_norm$cluster, Manhattan_E3 = km_manhattan$cluster)
+```
+
+```{r}
+# Gráfico de coincidencia
+df_comp_E1_E3 <- as.data.frame(table(Euclidea_E1 = as.factor(km_norm$cluster), Manhattan_E3 = as.factor(km_manhattan$cluster)))
+
+ggplot(df_comp_E1_E3, aes(x = Euclidea_E1, y = Freq, fill = Manhattan_E3)) +  geom_bar(stat = "identity", position = "fill") + scale_y_continuous(labels = scales::percent) +  labs(title = "Comparativa de K-means Euclídeo E1 vs Manhattan E3", x = "Clúster K-means (euclideo)", fill = "Clúster Manhattan")
+```
+
+Al cambiar de Euclidea a manhattan podemos observa que la estructura en un plano general se mantiene, unicamente hay un cambio en los bordes. Sin embargo, con Manhattan ha castigado las distancias largas. En el ejercicio 1 estaban alejados por una variable muy alta (Por ejemplo: colesterol extremo), ahora pueden ser asignados de una forma flexible.
+
+## Comparativa 2
+
+```{r}
+# Tabla eucleida (E2) vs manhattan (E3)
+table(Kmedians_E2 = clusters_kmedians, Manhattan_E3 = km_manhattan$cluster)
+```
+
+```{r}
+# Gráfico de coincidencia
+df_comp_E2_E3 <- as.data.frame(table(Kmedians_E2 = as.factor(clusters_kmedians), Manhattan_E3 = as.factor(km_manhattan$cluster)))
+
+ggplot(df_comp_E2_E3, aes(x = Kmedians_E2, y = Freq, fill = Manhattan_E3)) +geom_bar(stat = "identity", position = "fill") +scale_y_continuous(labels = scales::percent) +  labs(title = "Comparativa de K-medians vs K-means Manhattan",x = "cluster K-medians", fill = "cluster Manhattan")
+```
+
+En este caso al comparar K-medians con K-means Manhattan(media), son practicamente iguales (casi identicas)
+Esto nos indica algo sorprendente del dataset ya que el cambio de metricas de distancia tiene mas impacto que el cambio del centroide.
+
+### Se comentan los resultados. 
+
+El modelo en distancia Manhattan parece que captura mejor los datos medicos, debido a que las variables no siempre se correlacionan de forma esferica. No obstante, la robustez de los tres grupos principales a traves de (E1,E2,E3) confirma dicha segmentacion (Sanos/Colesterol/Cardiaco).
+
+## DBSCAN y OPTICS
+### Se aplica los algoritmos DBSCAN y OPTICS de forma correcta.
+
+En primer lugar fijaremos un minPts=5. Para encontrar epsilon, calcularemos el quinto vecino mas cercano (k=5) para todos los puntos y a partir de ahi buscamos el elbow.
+
+```{r}
+if(!require(dbscan)) install.packages("dbscan"); library(dbscan)
+if(!require(factoextra)) install.packages("factoextra"); library(factoextra)
+
+# Gráfico de distancias kNN para obtener eps
+kNNdistplot(heart_df_scaled, k = 5)
+
+```
+
+Si trazamos unas lineas imaginarias sobre y=1.5 e y=2 donde la curva comienza a ascender, podemos observar que el valor que sería mas adecuado sería el de eps=1.8 debido a que es donde los vecinos empiezan a crecer de forma exporencial, esto es un indicativo del limite entre el cluster y el ruido.
+
+### Se prueban, describen e interpretan los resultados con diferentes valores de `eps` y `minPts`.
+
+Para analizar la sensibilidad de dicho algoritmo, probaremos el valor de eps=1.8 como vimos anteriormente y con ella compararemos con OPTICS.
+
+```{r}
+set.seed(314)
+
+# Sabemos que minPts=5 y eps=1.8
+db_res<-dbscan(heart_df_scaled,eps=1.8,minPts = 5)
+
+# OPTICS
+optics_res<-optics(heart_df_scaled,minPts=5)
+```
+
+```{r}
+fviz_cluster(db_res, data = heart_df_scaled, geom = "point", main = "Visualización DBSCAN cuando eps=1.8 y minPts=5)")
+
+```
+
+En un principo vemos un gran poligono perteneciente al Cluster 1 y unos puntos negros dispersos (estos puntos negros pertenecen al ruido). En la grafica observamos como DBSCAN interpreta que los pacientes forman una estrucutura y solo marca los casos que son muy extremos
+
+```{r}
+plot(optics_res, main = "Diagrama OPTICS")
+```
+
+En el diagrama de OPTICS vemos valles pocos profundos, lo que nos indica la densidad del cluster, ademas existir mucha irregularidad. Esto nos deja a entender que no hay grupos grandes separados por vacios, sino que hay una densidad que es variable y continua.
+
+### Se obtiene una medida de ajuste del agrupamiento.
+
+Calcularemos la silueta para comprobar los grupos generados por DBSCAN
+
+```{r}
+sil_db <- silhouette(db_res$cluster, dist(heart_df_scaled))
+
+fviz_silhouette(sil_db, main = "Silueta DBSCAN")
+```
+
+Observamos que los valores de silhouette son mas bajos que en Kmeans, llegando a tener valores negativos. Esto es debido a que los puntos asignados en el cluster 0 no tiene un grupo, por lo que el silhouette es muy baja o negativa, lo que arrastra el promedio para abajo.
+
+Ademas podemos ver como la metrica apremia a los grupos que son compactos (como en kmeans). En DBSCAN al detectar formas no regulares y densidades variables suele obtener puntuacionees mas bajas aunque haya una separacion clinica.
+
+### Se comparan los resultados obtenidos con los modelos k-means y k-medians.
+
+```{r}
+# Gráfico  de Coincidencia
+df_comp_db <- as.data.frame(table(Kmeans_E1 = as.factor(km_norm$cluster), DBSCAN = as.factor(db_res$cluster)))
+
+ggplot(df_comp_db,aes(x=Kmeans_E1, y=Freq,fill=DBSCAN))+geom_bar(stat ="identity", position="fill")+scale_y_continuous(labels = scales::percent) +
+  labs(title = "Comparativa de K-means vs DBSCAN", x = "cluster Kmeans", y= "porcentaje", fill = "cluster DBSCAN") 
+ 
+```
+
+### Se comentan los resultados. 
+
+Como podemos ver, la presencia del ruido (DBSCAN cluster0) dentro del cluster 2 en kmeans hace que se corrobore lo anteriormente hallado. Esto es debido a que el cluster 2 agrupa a los pacientes con problemas de colesterol, dando por hecho que DBSCAN identifique estos valores extremos como anomalias en la distribucion de datos, separandolas del nucleo central.
+
+En conclusión, kmeans ha sido mas util para segmentar los pacientes, mientras que DBSCAN ha sido mejor para detectar "rarezas" (pacientes que requieren atencion rapida). Ambos metodos son complementarios, ya que kmeans nos da el paciente tipo y DBSCAN para alertar de una anomalia.
+
+## Selección de muestra de entrenamiento y test
+### Se seleccionan las muestra de entrenamiento y test.
+
+Para ello fijaremos un 70% para el entrenamiento y el otro 30% para tests.
+
+```{r}
+if(!require(caret)) install.packages("caret"); library(caret)
+set.seed(314)
+
+# Índices para partición estratificada (mantiene proporción de clases)
+train_index <- createDataPartition(heart_df$HeartDisease, p = 0.7, list = FALSE)
+
+# Conjuntos de entrenamiento y test
+train_data <- heart_df[train_index, ]
+test_data <- heart_df[-train_index, ]
+
+# Verificar proporciones
+cat("=== Distribución en conjunto de ENTRENAMIENTO ===\n")
+
+```
+
+```{r}
+print(table(train_data$HeartDisease))
+```
+
+```{r}
+cat("Proporciones:", round(prop.table(table(train_data$HeartDisease)), 4), "\n")
+```
+```{r}
+cat("\n=== Distribución en conjunto de TEST ===\n")
+```
+```{r}
+print(table(test_data$HeartDisease))
+
+```
+
+```{r}
+cat("Proporciones:", round(prop.table(table(test_data$HeartDisease)), 4), "\n")
+
+```
+
+```{r}
+cat("\nTamaño conjunto entrenamiento:", nrow(train_data), "observaciones")
+```
+
+```{r}
+cat("\nTamaño conjunto test:", nrow(test_data), "observaciones")
+
+```
+
+### Se justifican las proporciones seleccionadas.
+
+Se ha escogido una particion del 70/30 debido a que el dataset tiene menos de 1000 observaciones, por lo que tenemos que destinar un porcentaje alto para el entrenamiento (normalmente deberia ser entre el 70% o 80%). Por otro lado, hemos escogido el otro 30% restante para los test ya que si destinamos un porcentaje bajo, la calidad del modelo podria ser inestable y depender de pocos casos.
+
+Este equilibrio ofrecera un buen resultado y maximizara la informacion para el modelo.
+
+## Árbol de decisión (C5.0)
+### Se entrena el árbol de decisión, se generan reglas y se seleccionan e interpretan las más significativas.
+
+Para ello utilizaremos el algorimo C5.0, para ello entrenaremos el modelo utilizando el conjunto de train_data.
+
+```{r}
+if(!require(C50)) install.packages("C50"); library(C50)
+
+# Separar predictores y variable objetivo
+X_train <- train_data[, -which(names(train_data) == "HeartDisease")]
+y_train <- train_data$HeartDisease
+
+# Crear modelo C5.0 básico
+modelo_c50 <- C5.0(X_train, y_train)
+
+# Resumen del modelo
+summary(modelo_c50)
+```
+
+En nuestro arbol se ha generado 26 decisiones con un 7.9% de error, las reglas mas relevantes segun el uso de los atributos son:
+
+ST_Slope que se usa siempre y divide a la poblacion en dos grupos, los que tienden a estar sanos (UP) y los que tienen alto riesgo de enfermedad (Down, Flat). Y por otro lado Sex que se usa el 70.56%, seguido de 50.78% de ChestPainType.
+
+La otra regla utilizada es si es (Down,Flat), hombre y tiene MaxHR menor igual que 150, se clasifica como enfermo con alto riesgo.
+
+Y por ultimo otra de las reglas mas utilizadas es si es UP, tiene ChestPainType (ATA, NAP) y Oldpeak menor igual a 1.2, se clasifica como sano.
+
+### Se extraen las reglas del modelo en formato texto y gráfico.
+
+Debido a que tenemos un arbol base de 26 nodos, para visualizar va a ser un poco tedioso, es por ello que generaremos un arbol simplificado (con un minimo de caso de 25)
+
+```{r}
+
+modelo_c50_sim<-C5.0(X_train,y_train, control=C5.0Control(minCases = 25))
+
+# Graficamos el árbol
+plot(modelo_c50_sim,main="Arbol de Decisión Simplificado (C5.0)")
+```
+
+En el grafico podemos ver claramente la jerarquia de decision donde ST_Slope es la primera division. En la rama de la derecha (UP), la probabilidad de estar sano es muy alta, mientras que si es (Flat o Down), el riesgo aumenta bastante y el arbol inteta buscar variables como Sex o MaxHR para la diagnosis.
+
+### Adicionalmente, se genera la matriz de confusión para medir la capacidad predictiva del algoritmo en la muestra de test, teniendo en cuenta las distintas métricas asociadas a dicha matriz (precisión, sensibilidad, especificidad...). Alternativamente, si la variable objeto de estudio es cuantitativa pura se obtienen los criterios de error que nos permitan determinar la capacidad predictiva.
+
+Sobre el modelo de 26 nodos anterior utilizaremos un conjunto de prueba para verificar el comportamiento.
+
+```{r}
+test <- predict(modelo_c50, test_data)
+
+# Matriz de Confusión
+
+matriz_conf <- confusionMatrix(test, test_data$HeartDisease, positive = "Si")
+
+print(matriz_conf)
+```
+
+Tras evaluar el modelo sobre el conjunto del test(275 pacientes) podemos decir que:
+
+El modelo acierta el 78.18%, lo cual es un resultado aceptable, aunque mas adelante veremos que existe margen de mejora.
+
+Uno de los resultados para mi mas sorprendente es la Sensibilidad (Sensitivity) con un 88.82% esto quiere decir que de los 152 pacientes enfermos en el test, se han detectado 135, es decir; solo se han escapado 17 falsos negativos.
+
+Por ultimo, podemos hablar de la Specifity con un 65.04% que es bastante malo, es decir; de 123 pacientes sanos, el modelo solo ha clasificado a 80 y ha generado 43 falsos positivos. Aunque desde un punto medico, es mejor asustar a un paciente sano que mandar a casa a uno enfermo ¿no?
+
+### Se comparan e interpretan los resultados sin y con opciones de poda.
+
+Normalmente los resultados sin poda suele empeorar el modelo, pero ahora lo veremos.
+
+```{r}
+
+modelo_sin_poda<-C5.0(X_train, y_train, control = C5.0Control(noGlobalPruning = TRUE))
+
+pred_sin_poda<-predict(modelo_sin_poda, test_data)
+
+# Accuracy
+matriz_sin_poda<-confusionMatrix(pred_sin_poda, test_data$HeartDisease, positive="Si")
+acc_sin_poda<-matriz_sin_poda$overall['Accuracy']
+
+```
+
+```{r}
+cat("=== COMPARATIVA FINAL ===\n")
+cat("Modelo con Poda (Original) | Accuracy: 78.18 %\n")
+cat("Modelo sin Poda | Accuracy:", round(acc_sin_poda*100, 2), "%\n")
+cat("Tamaño del árbol sin Poda:", modelo_sin_poda$size, "nodos\n")
+```
+Pues la verdad que ha sido un poco sorprendente este resultado, resulta que el modelo sin poda a funcionado un poco mejor de un 78.18% a un 78.91%, esto a podido ser debido a que la poda hace que los arboles que son grandes tienen mucha informacion y por ello fallan en el test. Pero al parecer al pasar de 26 a 31 nodos (5 reglas extra) ha servido para capturar alguna matiz en alguna enfermedad.
+
+Sin embargo, al ser tran pequeña la ganancia, normalmente se tiende al modelo mas simple.
+
+### Se comentan los resultados.
+
+El algoritmo C5.0 ha mostrado ser eficaz alcanzando un porcentaje cerca del 79%, destacando tambien por una alta sensibilidad de un 88.8%. Esto nos deja entender que es un modelo seguro para descartar una enfermadad, ya que identifica 9 de cada 10 enfermos reales.
+
+En cuanto a las variables, el arbol confirma que la variable ST_Slope actua como el GRAN filtro inicial, seguida de Sex y el ChespainType.
+
+Por ultimo, respecto a la poda, al comparar ambos modelos vemos un fenomeno bastante fascinante ya que aumenta ligeramente respecto al modelo original. Sin embargo al ser una mejora de menos de 1% y tal aumento de complejidad (26 nodos a 31 nodos), prefiero el metodo original con poda.
+
+## Modelo supervisado alternativo (Random Forest)
+### Se prueba con otro tipo de árbol de decisión (por ejemplo, un criterio de partición distinto) u otro tipo de algoritmo supervisado. 
+
+Para este ejercicio utilizaremos Random Forest como realizamos en la PEC anterior, a diferencia de C5.0, este construye muchos arboles utilizando subconjuntos de datos aleatorios. Finalmente, se obtiene el voto mayoritario de todos los arboles.
+
+```{r}
+if(!require(randomForest)) install.packages("randomForest"); library(randomForest)
+
+set.seed(314)
+
+# Entrenamiento del modelo Random Forest donde ntree=500
+modelo_rf<-randomForest(HeartDisease ~ ., data=train_data,ntree=500, importance=TRUE)
+
+print(modelo_rf)
+```
+
+### Se detalla, comenta y evalúa la calidad de clasificación o del ajuste.
+
+Podemos observar como tiene una tasa de error del 12.31% lo que hace que el modelo tenga una precision del 87.69%, mucho mejor que el 78.18% que teniamos en el modelo anterior.
+
+En cuantro a la matriz de confusion podemos ver que este modelo comete menos errores clasificando a los enfermos (class error 9%) respecto a los que estan sanos en un 16%, esto hace que se mantenga la alta sensibilidad que estamos buscando.
+
+Para confirmar esto, realizaremos una evaluacion de las variables mas importantes y el rendimiento en el test.
+
+```{r}
+# Visualización de TOP variables
+
+varImpPlot(modelo_rf, main = "TOP Variables en Random Forest")
+```
+
+Esta grafica nos muestra lo que anteriormente vimos, donde ST_Slope, ChestPainType y Sex son las variables que mas aportan a la precision de este modelo. Sin en este caso borraramos ST_Slope, la capacidad de prediccion del modelo caeria.
+
+### Se comparan los resultados con el método supervisado del ejercicio 6.
+
+Ahora enfrentaremos los resultados de un arbol unico (C5.0 con poda) frente al conjunto de 500 arboles del Random Forest.
+
+```{r}
+# Evaluacion del conjunto de TEST
+
+pred_rf<-predict(modelo_rf, test_data)
+matriz_rf<-confusionMatrix(pred_rf, test_data$HeartDisease,positive="Si")
+                             
+# Sabemos que en el modelo C5.0 se obtuvo 0.7818 de accurrency y 88% de sensibility.
+acc_c50 <- 0.7818 
+sens_c50 <- 0.8882
+
+# Extraemos datos del Random Forest
+acc_rf <- matriz_rf$overall['Accuracy']
+sens_rf <- matriz_rf$byClass['Sensitivity']
+
+```
+
+```{r}
+cat("=== COMPARATIVA FINAL: C5.0 vs RANDOM FOREST ===\n")
+cat("Modelo C5.0 | Accuracy:", round(acc_c50*100, 2), "% | Sensibility:", round(sens_c50*100, 2), "%\n")
+cat("Modelo RF | Accuracy:", round(acc_rf*100, 2), "% | Sensibility:", round(sens_rf*100, 2), "%\n")
+```
+
+Los resultados son intachables, el modelo Random Forest supera por mucho el arbol de decision de C5.0, donde hemos aumentado de un 78.18% a un 85.82% en accurancy y una sensibilidad del 88.82% a un 92.76%, esto es debido a que logra capturar patrones mas complejos que un arbol pasaba desapercibido.
+
+En cuanto a la sensibilidad es lo mas relevante en cuanto a un ambito medico debido a que con este modelo es capaz de detectar casi en su totalidad los casos de positivos de enfemedades cardiacas y con ello reducir el riesgo de falsos negativos.
+
+Para concluir podemos decir que si buscamos una precision impecable, Random Forest es el mejor, con una potencia predictiva muy superior respecto a C5.0.
+
+## Limitaciones y conclusiones
+### Se identifica qué posibles limitaciones tienen los datos que has seleccionado para obtener conclusiones con los modelos (supervisado y no supervisado)
+
+Tras un analisis general de los datos y lo resultados obtenidos, se han valorado diversas limitaciones. La primera claramente es el desequilibrio que existe en cuanto al genero, la muestra contiene 700 hombres frente a las mujeres que hay menos de 200. Esto ha provocado en un sesgo algoritmico , donde el modelo aprendio a detectar patrones cardiacos masculinos con buena precision, pero a la hora de diagnosticar mujeres puede ser diferente ya que a menudo pueden ser distintos de los sintomas clasicos.
+
+Por otro lado, el tamaño de la muestra de 918 observaciones, es una muestra pequeña para un estandar medico.
+
+Para concluir debemos hablar de las variables que estan ausentes, como historial genetico, habitos como puede ser el tabaco, obsidad,etc, esto limita la capacidad del modelo para realizar una medicina preventiva antes de que un paciente realice una prueba de esfuerzo.
+
+### Se identifican posibles riesgos del uso del modelo y se resumen las principales conclusiones (mínimo 300 palabras).
+
+Los riesgo asociados al modelo serian el peligro de los falsos negativos, aunque el modelo Random Forest tuvo una sensibilidad del 92.76%, existe un margen casi del 7% de error. En un entorno clinico, decirle a un paciente que tiene a lo mejor cardiopatia que esta sano no seria lo mas adecuado, es por ello que el algoritmo siempre se debe usar como herramienta de apoyo y nunca como sustituto del diagnostico de un medico.
+
+Tambien tenemos que hablar que aunque el modelo Random Forest maximizo nuestra precision, perdemos la explicacion directa de como a podido llegar a esa decisión, es por ello que un medico podria dudar si el sistema no justifica como llego a esa conclusion.
+
+Como conclusiones principales, hemos verificado como los datos de enfermedades cardiacas siguen patrones detectables por Machine Leaning.
+
+Inicialmente en la fase no supervisada, los algoritmo de agrupamiento como K-means y DBSCAN nos ha permitido diferenciar los pacientes de riesgo, limpiar el dataset del ruido y validando la calidad de los datos antes de realizar ninguna prediccion.
+
+En la fase supervisada, mientras construiamos el arbol C5.0 nos dejo ver que la prueba de esfuerzo es una parte importante en el diagnostico, variables como ST_Slope y MaxHR fueron la mayor diferencia. Finalmente, gracias a Random Forest nos permitio superar las limitaciones que existian respecto a un solo arbol (C5.0), incrementando la fiabilidad cercana al 86% debido a la reduccion de la variancia por la tecnica de ensemble.
+
+No obstante, dada la diferencia de datos de Sex, este modelo no seria muy optimo en mujeres. Para solucionarlo, tendriamos que reentrenar el algoritmo con una nueva muestra que se encontrase balanceada, ademas de añadir variables adicionales (historial familiar(genetico), si es una persona fumadora, si es sendentario,etc) que puedan permitir tener un diagnostico en una medicina de prevencion.

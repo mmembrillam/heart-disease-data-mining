@@ -1,0 +1,350 @@
+---
+title: 'Minería de Datos: Selección y Preparación del Dataset (Heart Disease UCI)'
+author: "Manuel Membrilla Martinez"
+date: "Noviembre 2025"
+output:
+  html_document:
+    highlight: default
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_depth: 2
+    includes:
+  word_document: default
+  pdf_document:
+    highlight: zenburn
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Planteamiento del problema y selección del dataset
+
+# Análisis y desarrollo
+
+## Planteamiento del problema
+  
+El problema se va a centrar en un analisis de datos medicos relacionadas con enfermedades cardiacas con el fin de reconocer patrones asociadas a la existencia de riesgos cardiovasculares. Se utilizara el conjunto de datos de Heart Disease UCI. Al pertenecer a un ambito sanitario, este estudio es totalmente necesario para preveer el riesgo de los pacientes y reducir tanto complicaciones medicas, como costes medicos.
+
+### Objetivos analíticos
+
+Objetivo 1. Identificar que factores clinicos estan más relacionados con la presencia de enfermedades cardiacas.
+
+Objetivo 2. Analisis de variables externas como la edad, tipo de dolor, frecuencia cardiaca, etc.
+
+Objetivo 3. Evaluacion de relacion entre las variables mediante correlaciones y diagramas de dispersion
+
+Objetivo 4. Aplicacion de tecnicas de normalizacion y discretizacion
+
+Objetivo 5. Preparacion de los datos para las tecnicas supervisadas y no supervisadas
+
+Objetivo 6. Aplicar PCA para estudiar la estructura del dataset.
+
+### Metodología
+
+*Compresion de los datos*
+
+Carga del dataset, revisar la estructura y las vairables. Ademas se realizara un analisis exploratorio univariante y bivariante.
+
+*Transformacion de los datos*
+
+Normalizacion para distribuciones especificas
+Normalizacion minimo y maximo
+Transformacion logaritmica para los sesgos
+Discretizacion mediante el metodo de particion en intervalos con misma amplitud
+
+*Seleccion de caracteristicas*
+
+Variables con varianzas que se acerquen a 0.
+Correlacion entre variables.
+PCA para identicias componentes relevantes.
+
+*Reduccion de la dimensionalidad*
+
+Se realizara mediante PCA con la seleccion de componentes con mas de 90% de varianza aproximadamente.
+
+### Minería de datos
+
+Se realizara un analisis univariante y multivariante, en cuanto a las caracteristicas, normalizacion, transformaciones logaritmicas y discretizacion. Diagramas de dispercion y PCA como la tecnica principal del analisis.
+
+### Evaluación e interpretación del modelo
+
+Se utilizara el analisis de componentes princpales que nos permitira trabajar con nuevas caracteristicas entre si, este sistema estara mejor adaptado para la distribucion de datos.
+
+La calidad de representacion de las variables en el mapas se denomica cos2 (conseno cuadrado)
+
+## Selección del juego de datos
+
+En el enunciado se nos indica que el juego de datos tiene que tener capacidad para aplicar algoritmo supervisados y no supervisados.
+
+### Justificación de la elección
+
+La seleccion de los datos no ha sido tan facil realmente, ya que tenemos que evaluar las variables de cada uno y si realmente se iban a poder trabajar con esos datos. Aunque mi conocimiento en el ambito medico no es del todo el mejor, gracias al apoyo que nos ofrece este asignatura al realizar consultas a la IA en cuanto a terminologias que desconozco, considero que es una buena eleccion para trabajar todos los elementos que se solicitan en esta practica como el tamaño y estrucutura, ademas de ser potencialmente adecuado para el modelo supervisado y no supervisado. 
+
+## Análisis exploratorio de datos
+
+El dataset provienente para estudio: https://www.kaggle.com/datasets/fedesoriano/heart-failure-prediction/ 
+
+```{r}
+# Las librerias que se van utilizar
+if (!require(readr)) install.packages('readr');
+library(readr)
+if (!require('ggplot2')) install.packages('ggplot2'); library('ggplot2')
+```
+
+```{r}
+if (!require('dplyr')) install.packages('dplyr'); library('dplyr')
+```
+
+```{r}
+path ='heart.csv'
+heart_df <- read.csv(path, row.names=NULL)
+structure = str(heart_df)
+```
+
+EL dataset presenta 918 observaciones, mas de 5 variables numericas(Age, RestingBP, Chrolesterol, MaxHr, Oldpeak) y mas de 2 variables categoricas(Sex, ChestPainType, RestingECG, ExerciseANgina, ST_Slope), ademas de una variable binaria
+que en este caso es HeartDisease. Pro lor que entraria dentro de lo permitido por el enunciado. Ademas nos permitira en un futuro aplicar tecnicas supervisadas y no supervisados
+
+### Diccionario de variables
+
+1.-  Age: edad del paciente
+2.-  Sex: genero del paciente (0: Mujer, 1: Hombre)
+3.-  ChestPainType: tipo de dolor torafico
+4.-  RestingBP: presion arterial en reposo
+5.-  Cholesterol: nivel del colesterol
+6.-  FastingBS: glucosa en ayuno
+7.-  RestingECG: resultado del electrocardiograma
+8.-  MaxHR: frecuencia cardiaca maxima
+9.-  ExerciseAngina: Angina cuando realiza ejercicio
+10.- Oldpeak: caida del ST (electrocardiograma)
+11.- ST_Slope: la pendiente del ST (electrocardiograma)
+12.- HeartDisease: presencia de enfermedad
+
+### Análisis estadístico de variables
+
+```{r}
+#summary(heart_df)
+#
+summary(heart_df[c("Age","Cholesterol","RestingBP","MaxHR","Oldpeak")])
+```
+
+Obtenemos una edad minima de 28 años y un maximo de 77 años aproximadamente y con una mediana que lo situa en 54 años de edad, podemos oberserva que la mayoria de los pacientes son adultos.
+
+EN cuanto al colesterol, el resultado del minimo 0 es totalmente imposible, por lo que lo normal seria que existen valores atipicos o registros incorrectos, pero en la media nos encontramos valores por encima de la mediana. Ademas como maximo se reporta 600mg/dL que es un valor muy por encima de la poblacion en general. 
+
+La presion arterial (ResingBP), el rango se situa entre 0 y 200, no encontramos lo mismo con registros incorrectos o valores atipicos, la mediana con 130 mmHg nos indica que los pacientes por lo general presentan hipertension.
+
+Por ultimo tenemos la caida del ST (Oldpeak) que varia entre 0 y 6.2, la mayoria de los valores son cercanos a 0.
+
+### Análisis de variables categóricas
+
+```{r}
+heart_df$Sex <- factor(heart_df$Sex, levels = c(0,1), labels = c("Mujer","Hombre"))
+heart_df$HeartDisease <- factor(heart_df$HeartDisease, levels = c(0,1),
+labels = c("No","Sí"))
+
+table(heart_df$Sex)
+prop.table(table(heart_df$Sex))
+
+table(heart_df$HeartDisease)
+prop.table(table(heart_df$HeartDisease))
+```
+
+```{r}
+ggplot(heart_df, aes(x = Sex, fill = HeartDisease)) + geom_bar() +ylab("%") +ggtitle("Estadistica de enfermedad cardiaca por sexo")
+
+```
+
+Se puede observar con este grafico como los pacientes con enfermedad cardiaca suelen ser hombres, esto es algo que siempre a concordado con la literatura clinica. Tambien podemos ver que HearDisease esta totalmente balanceada y es algo positivo para utilizarlo en un futuro en modelos supervisados.
+
+## Limpieza y acondicionamiento de datos
+
+### Valores no disponibles
+
+```{r}
+faltantes_heart_df <- sort(colSums(is.na(heart_df)), decreasing=TRUE)
+faltantes_heart_df
+```
+
+Como observamos no hay ninguna caracteristica con datos no disponibles (NA)
+
+### Tareas de limpieza
+
+Eliminamos las variables cuyo valores no estan disponibles, que puedan causar ruido.
+
+```{r}
+heart_df_clean <-heart_df %>%
+mutate_if(is.character,as.factor) %>%
+mutate_if(is.logical, as.factor)
+
+str(heart_df_clean)
+```
+
+Con esto convertimos las variables de tipo para utilizarlas en analisis posteriores y en modelos supervisados. No se han tenido que eliminar ninguna columna, ya que no se han detectado valores NA.
+
+### Valores imposibles
+
+```{r}
+heart_df_clean$Cholesterol[heart_df_clean$Cholesterol==0] <- NA
+heart_df_clean$RestingBP[heart_df_clean$RestingBP==0] <- NA
+
+colSums(is.na(heart_df_clean))
+```
+
+## Análisis univariante y bivariante
+
+### Histograma de edad (Age)
+
+```{r}
+hist(heart_df$Age,main="Histograma de edad", xlab="Edad", ylab="Cantidad")
+```
+
+Observamos una curva que va incrementando de los 30 hasta 50-55, esto es un perfil coherente de la poblacion de riesgo para la enfermedad cardiaca.
+
+### Histograma de colesterol
+
+```{r}
+hist(heart_df_clean$Cholesterol,main="Histograma de Colesterol", xlab="Colesterol", ylab="Cantidad")
+```
+
+Observamos como el histograma del colesterol con una alta concentracion en pacientes en valores de colesterol moderados y una cola larga que se extiende a valores elevados. Algunos de estos pacientes podria corresponder a hipercolesterolemia severa o errores de registro. Ademas de los valores en 0 que sugiere valores anormalos o mal codificados, que ya se arreglo en la fase de limpieza.
+
+### Histograma de presión arterial en reposo
+
+```{r}
+hist(heart_df_clean$RestingBP,main="Histograma de presion arterial en reposo", xlab="Presencia arterial en reposo", ylab="Cantidad")
+```
+
+Se observa que la mayoria de los pacientes presentan valores entre los 120-1240 mmHg, esto normalemente es compatible con situaciones de hipertension leve.
+
+### Histograma de frecuencia cardíaca máxima
+
+```{r}
+hist(heart_df$MaxHR,main="Histograma de maxima frecuencia cardiaca maxima", xlab="frecuencia cardiaca maxima", ylab="Cantidad")
+```
+
+La mayor parte de los pacientes han alcanzado un rango de frecuencia maximas moderadas durante la prueba de esfruezo. No se aprencia valores tan extremos como en colesterol o presion arterial. 
+### Histograma de Oldpeak
+
+```{r}
+hist(heart_df$Oldpeak,main="Histograma de Oldpeak", xlab="oldpeak", ylab="Cantidad")
+```
+
+La mayoria de los pacientes presentan valores cercanos a cero, mientras que una minoria tienen valores altos en la depresion del segmento ST. Esto es coherente desde una parte clinica ya que solo una parte de los pacientes presentan alteraciones significativas en el electro. 
+
+### Dispersión: Edad vs. Colesterol
+
+```{r}
+ggplot(heart_df_clean, aes(x=Age, y=Cholesterol, color=HeartDisease))+geom_point(na.rm=TRUE)+ggtitle("Relacion entre edad y el colesterol")
+```
+Ademas podemos observar mediante los puntos, si estas personas padecen de alguna enfermedad cardiaca.
+
+### Dispersión: Edad vs. Frecuencia cardíaca máxima
+
+```{r}
+ggplot(heart_df, aes(x=Age, y=MaxHR))+geom_point()+ggtitle("Relacion entre edad y la frecuencia maxima cardiaca")
+```
+
+### Dispersión: Presión arterial vs. Colesterol
+
+```{r}
+ggplot(heart_df_clean, aes(x=RestingBP, y=Cholesterol))+geom_point(na.rm=TRUE)+ggtitle("Relacion entre la presion cardiaca en reposo y el colesterol")
+```
+
+### Dispersión: Colesterol vs. Oldpeak
+
+```{r}
+ggplot(heart_df_clean, aes(x=Cholesterol, y=Oldpeak))+geom_point(na.rm=TRUE)+ggtitle("Relacion entre el colesterol y el oldpeak")
+```
+
+### Test de correlación entre variables
+
+Seleccion de variables numericas
+
+```{r}
+variables_numericas <- heart_df %>% select(Age, Cholesterol, RestingBP, MaxHR, Oldpeak)
+```
+
+Matriz de correlacion
+
+```{r}
+matriz_correlacion <- cor(variables_numericas)
+matriz_correlacion
+```
+
+## Transformación de datos
+
+### Normalización min-max
+
+```{r}
+normalize <- function(x) {
+(x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+}
+
+heart_df_norm <- heart_df_clean
+heart_df_norm[, sapply(heart_df_norm, is.numeric)] <-
+lapply(heart_df_norm[, sapply(heart_df_norm, is.numeric)], normalize)
+
+head(heart_df_norm)
+
+```
+Se ha aplicado una normalizacion max-min para todas las variables numericas, transformando cada variable en variables entre 0 y 1, mantiniendo la forma pero ajustando la escala. Esto se realiza con el fin de evitar rangos diferentes y tenga mas afluencia.
+
+## Métodos de discretización
+
+Para ello particionaremos en intervalos con misma amplitud, intervalos de igual frecuencia, y discretizacion con k-means.
+
+### Discretización de la variable HeartDisease
+
+En este caso la variable ya es binaria, el cual 0 es que no existe enfermedad cardiaca y 1 si existe enfermedad cardiaca por lo tanto no hace falta discretizacion.
+
+La distribucion seria la siguiente
+
+```{r}
+table(heart_df$HeartDisease)
+prop.table(table(heart_df$HeartDisease))
+```
+
+### Partición en intervalos de igual amplitud
+
+Vamos a discretizar la variable Age en tres intervalos, de forma que quedaria edad baja, edad media y edad alta. Para ello se realiza un cut.
+
+```{r}
+heart_df$Age_part <- cut(heart_df$Age, breaks=3, labels= c("Edad baja", "Edad media", "Edad alta"))
+table(heart_df$Age_part)
+```
+
+Este metodo no garantiza que exista el mismo numero de observaciones para cada uno de los intervalos.
+
+## Análisis de Componentes Principales (PCA)
+
+### Aplicación del PCA
+
+Mediante prcomp()
+
+```{r}
+pca_heart_df <- heart_df_norm %>%
+select(Age, RestingBP, Cholesterol, MaxHR, Oldpeak) %>%
+na.omit()
+
+pca_res <- prcomp(pca_heart_df, center = TRUE, scale. = TRUE)
+
+summary(pca_res)
+
+```
+
+### Scree plot
+
+```{r}
+var_scree <- pca_res$sdev^2 / sum(pca_res$sdev^2)
+
+plot(var_scree,
+type = "b",
+xlab = "Componente principal",
+ylab = "Proporción de varianza explicada",
+main = "Scree plot - PCA")
+
+```
+
